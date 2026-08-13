@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gait Capture — 3-Node IMU Console (ESP32-C3)</title>
+<style>
+  :root{
+    --bg:            #12151a;
+    --panel:         #1a1f26;
+    --panel-raised:  #202631;
+    --grid-line:     rgba(255,255,255,0.045);
+    --hairline:      rgba(255,255,255,0.09);
+    --text:          #e8eaed;
+    --text-dim:      #8b94a3;
+    --text-faint:    #545c6b;
+    --amber:         #e2b54c;
+    --ok:            #4cd08a;
+    --danger:        #e2574c;
+
+    --c-rleg:        #e2574c;
+    --c-lleg:        #4c8fe2;
+    --c-torso:       #4cd08a;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  *{ box-sizing:border-box; }
+
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:
+      linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0/ 100% 28px,
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0/ 28px 100%,
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .wrap{
+    max-width:1180px;
+    margin:0 auto;
+    padding:22px 20px 60px;
+  }
+
+  /* ---------- Header / transport bar ---------- */
+  header{
+    display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between;
+    gap:16px;
+    padding-bottom:18px; margin-bottom:22px;
+    border-bottom:1px solid var(--hairline);
+  }
+  .brand-eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--text-faint); margin:0 0 4px;
+  }
+  h1{
+    margin:0; font-size:22px; font-weight:650; letter-spacing:-0.01em;
+  }
+  .rec-status{
+    display:flex; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:13px; color:var(--text-dim);
+  }
+  .rec-dot{
+    width:9px; height:9px; border-radius:50%; background:var(--text-faint); flex:none;
+  }
+  .rec-dot.live{ background:var(--danger); animation:pulse 1s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.25;} }
+
+  .transport{ display:flex; gap:8px; flex-wrap:wrap; }
+  button{
+    font-family:var(--sans); font-size:13.5px; font-weight:600;
+    border-radius:7px; border:1px solid var(--hairline);
+    background:var(--panel-raised); color:var(--text);
+    padding:10px 15px; cursor:pointer;
+    display:inline-flex; align-items:center; gap:7px;
+    transition:background .12s, border-color .12s, opacity .12s;
+  }
+  button:hover:not(:disabled){ background:#26303e; border-color:rgba(255,255,255,.18); }
+  button:disabled{ opacity:.35; cursor:not-allowed; }
+  button.primary{ background:var(--ok); border-color:var(--ok); color:#0a1410; }
+  button.primary:hover:not(:disabled){ background:#5fe19c; }
+  button.stop{ background:var(--danger); border-color:var(--danger); color:#210a08; }
+  button.stop:hover:not(:disabled){ background:#ea6f65; }
+  button.ghost{ background:transparent; }
+  button .glyph{ font-size:14px; line-height:1; }
+
+  /* ---------- Channel panels ---------- */
+  .channels{
+    display:grid; grid-template-columns:repeat(3, 1fr); gap:14px;
+    margin-bottom:20px;
+  }
+  @media (max-width:860px){ .channels{ grid-template-columns:1fr; } }
+
+  .panel{
+    background:var(--panel);
+    border:1px solid var(--hairline);
+    border-top:3px solid var(--chan-color, var(--text-faint));
+    border-radius:10px;
+    padding:16px 16px 14px;
+  }
+  .panel-head{
+    display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;
+  }
+  .panel-title{ display:flex; align-items:center; gap:9px; }
+  .led{
+    width:10px; height:10px; border-radius:50%;
+    background:var(--text-faint);
+    box-shadow:0 0 0 3px rgba(255,255,255,0.03);
+    flex:none;
+  }
+  .led.connecting{ background:var(--amber); animation:pulse 0.8s ease-in-out infinite; }
+  .led.connected{ background:var(--ok); }
+  .led.recording{ background:var(--danger); animation:pulse .6s ease-in-out infinite; }
+
+  .panel-title h2{ margin:0; font-size:14.5px; font-weight:650; }
+  .panel-title small{ display:block; font-family:var(--mono); font-size:10.5px; color:var(--text-faint); margin-top:1px; }
+
+  .panel-connect{
+    font-size:12px; padding:7px 11px;
+  }
+
+  .stat-grid{
+    display:grid; grid-template-columns:1fr 1fr; gap:8px 14px;
+    font-family:var(--mono); font-size:12px;
+    margin-top:10px; padding-top:10px; border-top:1px dashed var(--hairline);
+  }
+  .stat-grid .k{ color:var(--text-faint); }
+  .stat-grid .v{ color:var(--text); text-align:right; }
+  .stat-grid .v.warn{ color:var(--amber); }
+  .stat-grid .v.bad{ color:var(--danger); }
+
+  .bufbar{
+    height:5px; border-radius:3px; background:rgba(255,255,255,0.06); overflow:hidden; margin-top:10px;
+  }
+  .bufbar > i{ display:block; height:100%; width:0%; background:var(--chan-color, var(--ok)); transition:width .25s; }
+
+  /* ---------- Session summary strip ---------- */
+  .summary{
+    display:flex; flex-wrap:wrap; gap:20px;
+    background:var(--panel); border:1px solid var(--hairline); border-radius:10px;
+    padding:14px 18px; margin-bottom:20px;
+    font-family:var(--mono); font-size:12.5px; color:var(--text-dim);
+  }
+  .summary b{ color:var(--text); font-weight:650; }
+
+  /* ---------- Log ---------- */
+  .log-head{
+    display:flex; align-items:center; justify-content:space-between;
+    font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--text-faint); margin-bottom:8px;
+  }
+  .log{
+    background:var(--panel); border:1px solid var(--hairline); border-radius:10px;
+    padding:12px 14px; max-height:180px; overflow-y:auto;
+    font-family:var(--mono); font-size:12px; line-height:1.65; color:var(--text-dim);
+  }
+  .log div span.t{ color:var(--text-faint); margin-right:8px; }
+
+  .banner{
+    background:#3a2a1a; border:1px solid #6b4a20; color:#f0c98a;
+    border-radius:9px; padding:12px 16px; margin-bottom:18px;
+    font-size:13px; line-height:1.5;
+  }
+  .banner code{ font-family:var(--mono); background:rgba(0,0,0,.25); padding:1px 5px; border-radius:4px; }
+
+  footer{
+    margin-top:28px; font-size:11.5px; color:var(--text-faint); font-family:var(--mono);
+    line-height:1.7;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="brand-eyebrow">Gait Capture Console</p>
+      <h1>3-Node IMU Acquisition <span style="color:var(--text-faint); font-weight:500;">— XIAO ESP32-C3 + MPU6050</span></h1>
+    </div>
+    <div class="rec-status">
+      <span class="rec-dot" id="recDot"></span>
+      <span id="recLabel">Idle</span>
+      <span style="color:var(--text-faint)">·</span>
+      <span id="elapsed">00:00.0</span>
+    </div>
+    <div class="transport">
+      <button class="primary" id="btnStart"><span class="glyph">▶</span> Start Recording</button>
+      <button class="stop" id="btnStop" disabled><span class="glyph">■</span> Stop Recording</button>
+      <button class="ghost" id="btnReset"><span class="glyph">↺</span> Reset Data</button>
+      <button id="btnDownload" disabled><span class="glyph">⇩</span> Download CSV</button>
+    </div>
+  </header>
+
+  <div class="banner" id="supportBanner" style="display:none;"></div>
+
+  <div class="channels" id="channels"></div>
+
+  <div class="summary" id="summary">
+    <div>Samples logged: <b id="sumSamples">0</b></div>
+    <div>Devices connected: <b id="sumConnected">0 / 3</b></div>
+    <div>Est. total packet loss: <b id="sumLoss">0</b></div>
+    <div>Session started: <b id="sumStart">—</b></div>
+  </div>
+
+  <div class="log-head"><span>Console log</span><span id="logClear" style="cursor:pointer;">clear</span></div>
+  <div class="log" id="log"></div>
+
+  <footer>
+    Requires a Web-Bluetooth-capable browser (Chrome/Edge on desktop or Android) served over HTTPS or from localhost.<br>
+    Flash the paired C3_IMU.ino sketch onto all 3 boards (Seeed XIAO ESP32-C3 + MPU6050), changing only <code>DEVICE_ROLE</code> per board.<br>
+    Firmware timestamps use each node's own <code>millis()</code> clock, corrected to host epoch time at Start via a BLE time-sync handshake.<br>
+    Raw IMU counts are converted to physical units in the CSV using ±2&nbsp;g / ±250&nbsp;dps full-scale (must match the firmware's ACCEL_RANGE_G / GYRO_RANGE_DPS).
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Config — MUST match the firmware sketch (C3_IMU.ino)
+  // ---------------------------------------------------------------------
+  const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+  const CONTROL_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+  const DATA_UUID    = "0000ffe1-0000-1000-8000-00805f9b34fb";
+  const STATUS_UUID  = "0000ffe2-0000-1000-8000-00805f9b34fb";
+
+  const ACCEL_RANGE_G   = 2;      // +/- g full scale (firmware ACCEL_RANGE_G, MPU6050 AFS_SEL=0)
+  const GYRO_RANGE_DPS  = 250;    // +/- dps full scale (firmware GYRO_RANGE_DPS, MPU6050 FS_SEL=0)
+  const ACCEL_LSB = ACCEL_RANGE_G / 32768.0;
+  const GYRO_LSB  = GYRO_RANGE_DPS / 32768.0;
+
+  const ROLES = [
+    { id:"rleg",  label:"Right Leg", prefix:"GAIT_C3_RLEG",  color:"var(--c-rleg)"  },
+    { id:"lleg",  label:"Left Leg",  prefix:"GAIT_C3_LLEG",  color:"var(--c-lleg)"  },
+    { id:"torso", label:"Torso",     prefix:"GAIT_C3_TORSO", color:"var(--c-torso)" },
+  ];
+
+  // ---------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------
+  const state = {};
+  ROLES.forEach(r => state[r.id] = {
+    device:null, server:null, controlChar:null, dataChar:null, statusChar:null,
+    connected:false, connecting:false, recording:false,
+    lastSeq:null, receivedCount:0, lostCount:0,
+    bufferPct:0, overflow:0, writeFails:0, missedTicks:0, rateHz:0,
+    epochOffset:null,          // epoch_ms - device_millis, from last time-sync ack
+    syncResolve:null, syncTimer:null,
+  });
+
+  let sessionRows = [];        // {role, seq, t, ax,ay,az,gx,gy,gz}
+  let isRecording = false;
+  let sessionStartWall = null; // Date when Start was pressed (for elapsed timer / display)
+  let elapsedTimer = null;
+
+  // ---------------------------------------------------------------------
+  // DOM helpers
+  // ---------------------------------------------------------------------
+  const $ = id => document.getElementById(id);
+  const channelsEl = $("channels");
+  const logEl = $("log");
+
+  function log(msg, cls){
+    const row = document.createElement("div");
+    const time = new Date().toLocaleTimeString();
+    row.innerHTML = `<span class="t">${time}</span><span${cls?` style="color:var(--${cls})"`:""}>${msg}</span>`;
+    logEl.appendChild(row);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  $("logClear").addEventListener("click", () => logEl.innerHTML = "");
+
+  function buildPanels(){
+    ROLES.forEach(r => {
+      const el = document.createElement("div");
+      el.className = "panel";
+      el.style.setProperty("--chan-color", r.color);
+      el.innerHTML = `
+        <div class="panel-head">
+          <div class="panel-title">
+            <span class="led" id="led-${r.id}"></span>
+            <div>
+              <h2>${r.label}</h2>
+              <small>${r.prefix}</small>
+            </div>
+          </div>
+          <button class="panel-connect" id="connect-${r.id}">Connect</button>
+        </div>
+        <div class="stat-grid">
+          <span class="k">Status</span><span class="v" id="status-${r.id}">Disconnected</span>
+          <span class="k">Sample rate</span><span class="v" id="rate-${r.id}">— Hz</span>
+          <span class="k">Samples</span><span class="v" id="count-${r.id}">0</span>
+          <span class="k">Packet loss</span><span class="v" id="loss-${r.id}">0</span>
+          <span class="k">Node buffer overflow</span><span class="v" id="overflow-${r.id}">0</span>
+          <span class="k">BLE send retries</span><span class="v" id="retries-${r.id}">0</span>
+          <span class="k">Missed IMU ticks</span><span class="v" id="missed-${r.id}">0</span>
+        </div>
+        <div class="bufbar"><i id="buf-${r.id}"></i></div>
+      `;
+      channelsEl.appendChild(el);
+      $(`connect-${r.id}`).addEventListener("click", () => connectDevice(r));
+    });
+  }
+
+  function refreshChannelUI(role){
+    const s = state[role.id];
+    const led = $(`led-${role.id}`);
+    led.className = "led" + (s.recording ? " recording" : s.connected ? " connected" : s.connecting ? " connecting" : "");
+    $(`status-${role.id}`).textContent = s.recording ? "Recording" : s.connected ? "Connected" : s.connecting ? "Connecting…" : "Disconnected";
+    $(`rate-${role.id}`).textContent = s.connected ? `${s.rateHz.toFixed(1)} Hz` : "— Hz";
+    $(`count-${role.id}`).textContent = s.receivedCount.toLocaleString();
+    const lossEl = $(`loss-${role.id}`);
+    lossEl.textContent = s.lostCount.toLocaleString();
+    lossEl.className = "v" + (s.lostCount > 0 ? " warn" : "");
+    const ofEl = $(`overflow-${role.id}`);
+    ofEl.textContent = s.overflow.toLocaleString();
+    ofEl.className = "v" + (s.overflow > 0 ? " bad" : "");
+    const rtEl = $(`retries-${role.id}`);
+    rtEl.textContent = s.writeFails.toLocaleString();
+    rtEl.className = "v" + (s.writeFails > 200 ? " bad" : s.writeFails > 0 ? " warn" : "");
+    const msEl = $(`missed-${role.id}`);
+    msEl.textContent = s.missedTicks.toLocaleString();
+    msEl.className = "v" + (s.missedTicks > 50 ? " bad" : s.missedTicks > 0 ? " warn" : "");
+    $(`buf-${role.id}`).style.width = `${s.bufferPct}%`;
+    $(`connect-${role.id}`).textContent = s.connected ? "Disconnect" : "Connect";
+    $(`connect-${role.id}`).onclick = () => s.connected ? disconnectDevice(role) : connectDevice(role);
+    refreshSummary();
+    refreshTransport();
+  }
+
+  function refreshSummary(){
+    $("sumSamples").textContent = sessionRows.length.toLocaleString();
+    const connected = ROLES.filter(r => state[r.id].connected).length;
+    $("sumConnected").textContent = `${connected} / ${ROLES.length}`;
+    const loss = ROLES.reduce((a,r) => a + state[r.id].lostCount, 0);
+    $("sumLoss").textContent = loss.toLocaleString();
+  }
+
+  function refreshTransport(){
+    const anyConnected = ROLES.some(r => state[r.id].connected);
+    $("btnStart").disabled = !anyConnected || isRecording;
+    $("btnStop").disabled = !isRecording;
+    $("btnDownload").disabled = sessionRows.length === 0;
+  }
+
+  function updateElapsed(){
+    if (!sessionStartWall) { $("elapsed").textContent = "00:00.0"; return; }
+    const ms = Date.now() - sessionStartWall;
+    const totalSec = ms / 1000;
+    const m = Math.floor(totalSec / 60).toString().padStart(2,"0");
+    const s = (totalSec % 60).toFixed(1).padStart(4,"0");
+    $("elapsed").textContent = `${m}:${s}`;
+  }
+
+  function setRecordingUI(on){
+    isRecording = on;
+    $("recDot").className = "rec-dot" + (on ? " live" : "");
+    $("recLabel").textContent = on ? "Recording" : "Idle";
+    if (on) {
+      sessionStartWall = Date.now();
+      $("sumStart").textContent = new Date(sessionStartWall).toLocaleTimeString();
+      elapsedTimer = setInterval(updateElapsed, 100);
+    } else if (elapsedTimer) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    }
+    refreshTransport();
+  }
+
+  // ---------------------------------------------------------------------
+  // BLE connection
+  // ---------------------------------------------------------------------
+  async function connectDevice(role){
+    const s = state[role.id];
+    if (s.connecting || s.connected) return;
+    if (!navigator.bluetooth) {
+      log("Web Bluetooth is not available in this browser.", "danger");
+      return;
+    }
+    s.connecting = true;
+    refreshChannelUI(role);
+    try {
+      log(`Requesting ${role.label} (${role.prefix})…`);
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: role.prefix }],
+        optionalServices: [SERVICE_UUID],
+      });
+      s.device = device;
+      device.addEventListener("gattserverdisconnected", () => onDisconnected(role));
+
+      log(`Connecting GATT for ${role.label}…`);
+      const server = await device.gatt.connect();
+      s.server = server;
+
+      const service = await server.getPrimaryService(SERVICE_UUID);
+      s.controlChar = await service.getCharacteristic(CONTROL_UUID);
+      s.dataChar = await service.getCharacteristic(DATA_UUID);
+      s.statusChar = await service.getCharacteristic(STATUS_UUID);
+
+      await s.dataChar.startNotifications();
+      s.dataChar.addEventListener("characteristicvaluechanged", e => onDataNotify(role, e));
+
+      await s.statusChar.startNotifications();
+      s.statusChar.addEventListener("characteristicvaluechanged", e => onStatusNotify(role, e));
+
+      s.connected = true;
+      s.connecting = false;
+      log(`${role.label} connected.`, "ok");
+    } catch (err) {
+      s.connecting = false;
+      s.connected = false;
+      log(`${role.label}: ${err.message || err}`, "danger");
+    }
+    refreshChannelUI(role);
+  }
+
+  function disconnectDevice(role){
+    const s = state[role.id];
+    if (s.device && s.device.gatt.connected) s.device.gatt.disconnect();
+  }
+
+  function onDisconnected(role){
+    const s = state[role.id];
+    s.connected = false;
+    s.connecting = false;
+    s.recording = false;
+    log(`${role.label} disconnected.`, "amber");
+    refreshChannelUI(role);
+  }
+
+  // ---------------------------------------------------------------------
+  // Notification handlers
+  // ---------------------------------------------------------------------
+  function onDataNotify(role, event){
+    const dv = event.target.value;
+    if (dv.byteLength < 6) return;
+    const type = dv.getUint8(0);
+    if (type !== 0x01) return;
+    const n = dv.getUint8(1);
+    const seqStart = dv.getUint32(2, true);
+    const s = state[role.id];
+
+    if (s.lastSeq !== null && seqStart > s.lastSeq + 1) {
+      s.lostCount += (seqStart - s.lastSeq - 1);
+    }
+
+    let off = 6;
+    for (let i = 0; i < n && off + 16 <= dv.byteLength; i++) {
+      const t  = dv.getUint32(off, true); off += 4;
+      const ax = dv.getInt16(off, true);  off += 2;
+      const ay = dv.getInt16(off, true);  off += 2;
+      const az = dv.getInt16(off, true);  off += 2;
+      const gx = dv.getInt16(off, true);  off += 2;
+      const gy = dv.getInt16(off, true);  off += 2;
+      const gz = dv.getInt16(off, true);  off += 2;
+      const seq = seqStart + i;
+      s.lastSeq = seq;
+      s.receivedCount++;
+      if (isRecording) sessionRows.push({ role: role.id, seq, t, ax, ay, az, gx, gy, gz });
+    }
+    refreshChannelUI(role);
+  }
+
+  function onStatusNotify(role, event){
+    const dv = event.target.value;
+    if (dv.byteLength < 1) return;
+    const type = dv.getUint8(0);
+    const s = state[role.id];
+
+    if (type === 0x02 && dv.byteLength >= 13) {
+      const epoch = dv.getBigUint64(1, true);
+      const millisAtSync = dv.getUint32(9, true);
+      s.epochOffset = Number(epoch) - millisAtSync;
+      log(`${role.label}: time sync ok (offset ${s.epochOffset} ms).`);
+      if (s.syncResolve) { s.syncResolve(); s.syncResolve = null; clearTimeout(s.syncTimer); }
+    } else if (type === 0x03 && dv.byteLength >= 9) {
+      s.recording = !!dv.getUint8(1);
+      s.bufferPct = dv.getUint8(2);
+      s.overflow = dv.getUint32(3, true);
+      s.rateHz = dv.getUint16(7, true) / 10;
+      s.writeFails = dv.byteLength >= 13 ? dv.getUint32(9, true) : s.writeFails;
+      s.missedTicks = dv.byteLength >= 17 ? dv.getUint32(13, true) : s.missedTicks;
+      refreshChannelUI(role);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Commands
+  // ---------------------------------------------------------------------
+  // The C3 sketch uses plain ASCII text commands (same style as the proven
+  // single-node sketch), unlike a single-byte binary protocol.
+  const textEncoder = new TextEncoder();
+
+  async function sendCommand(role, text){
+    const s = state[role.id];
+    if (!s.connected || !s.controlChar) return;
+    await s.controlChar.writeValue(textEncoder.encode(text));
+  }
+
+  function sendTimeSync(role){
+    const s = state[role.id];
+    if (!s.connected || !s.controlChar) return Promise.resolve();
+    const text = `TIME:${Date.now()}`;
+    return new Promise(resolve => {
+      s.syncResolve = resolve;
+      s.syncTimer = setTimeout(() => { s.syncResolve = null; resolve(); }, 600); // fallback timeout
+      s.controlChar.writeValue(textEncoder.encode(text)).catch(() => resolve());
+    });
+  }
+
+  async function startRecording(){
+    const connectedRoles = ROLES.filter(r => state[r.id].connected);
+    if (connectedRoles.length === 0) {
+      log("No devices connected — connect at least one node first.", "danger");
+      return;
+    }
+    log("Syncing time on all connected nodes…");
+    await Promise.all(connectedRoles.map(r => sendTimeSync(r)));
+
+    log("Starting recording…");
+    for (const r of connectedRoles) {
+      const s = state[r.id];
+      s.lastSeq = null; s.receivedCount = 0; s.lostCount = 0;
+      await sendCommand(r, "START");
+    }
+    setRecordingUI(true);
+    log("Recording started.", "ok");
+  }
+
+  async function stopRecording(){
+    const connectedRoles = ROLES.filter(r => state[r.id].connected);
+    for (const r of connectedRoles) await sendCommand(r, "STOP");
+    setRecordingUI(false);
+    log("Recording stopped.");
+  }
+
+  async function resetData(){
+    if (sessionRows.length > 0 && !confirm("Clear all captured data from this session? This cannot be undone.")) return;
+    const connectedRoles = ROLES.filter(r => state[r.id].connected);
+    for (const r of connectedRoles) await sendCommand(r, "RESET");
+    sessionRows = [];
+    ROLES.forEach(r => { state[r.id].lastSeq = null; state[r.id].receivedCount = 0; state[r.id].lostCount = 0; refreshChannelUI(r); });
+    sessionStartWall = null;
+    $("sumStart").textContent = "—";
+    log("Data reset.", "ok");
+    refreshSummary();
+    refreshTransport();
+  }
+
+  function downloadCSV(){
+    if (sessionRows.length === 0) return;
+    const rows = [...sessionRows].sort((a,b) => {
+      const ea = a.t + (state[a.role].epochOffset ?? 0);
+      const eb = b.t + (state[b.role].epochOffset ?? 0);
+      return ea - eb;
+    });
+    const header = [
+      "epoch_ms","iso_time","role","seq",
+      "accel_x_raw","accel_y_raw","accel_z_raw",
+      "gyro_x_raw","gyro_y_raw","gyro_z_raw",
+      "accel_x_g","accel_y_g","accel_z_g",
+      "gyro_x_dps","gyro_y_dps","gyro_z_dps",
+    ].join(",") + "\n";
+
+    const lines = new Array(rows.length);
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const offset = state[r.role].epochOffset;
+      const epoch = offset != null ? r.t + offset : "";
+      const iso = offset != null ? new Date(epoch).toISOString() : "";
+      lines[i] = [
+        epoch, iso, r.role, r.seq,
+        r.ax, r.ay, r.az, r.gx, r.gy, r.gz,
+        (r.ax * ACCEL_LSB).toFixed(5), (r.ay * ACCEL_LSB).toFixed(5), (r.az * ACCEL_LSB).toFixed(5),
+        (r.gx * GYRO_LSB).toFixed(4), (r.gy * GYRO_LSB).toFixed(4), (r.gz * GYRO_LSB).toFixed(4),
+      ].join(",");
+    }
+
+    const blob = new Blob([header + lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    a.href = url;
+    a.download = `gait_capture_${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    log(`Downloaded ${rows.length.toLocaleString()} samples as CSV.`, "ok");
+  }
+
+  // ---------------------------------------------------------------------
+  // Wire up
+  // ---------------------------------------------------------------------
+  $("btnStart").addEventListener("click", startRecording);
+  $("btnStop").addEventListener("click", stopRecording);
+  $("btnReset").addEventListener("click", resetData);
+  $("btnDownload").addEventListener("click", downloadCSV);
+
+  buildPanels();
+  ROLES.forEach(refreshChannelUI);
+
+  if (!navigator.bluetooth) {
+    $("supportBanner").style.display = "block";
+    $("supportBanner").innerHTML = "This browser doesn't support Web Bluetooth. Use desktop Chrome/Edge, or Chrome for Android. The page must also be served over <code>https://</code> or from <code>localhost</code>.";
+  } else if (!window.isSecureContext) {
+    $("supportBanner").style.display = "block";
+    $("supportBanner").innerHTML = "This page is not running in a secure context. Web Bluetooth requires <code>https://</code> or <code>localhost</code>.";
+  }
+
+  log("Console ready. Connect each node, then Start Recording.");
+})();
+</script>
+</body>
+</html>
